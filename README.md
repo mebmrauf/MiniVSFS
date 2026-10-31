@@ -1,11 +1,12 @@
 # MiniVSFS
 
-MiniVSFS is a tiny file system you can inspect byte by byte. It comes with two C programs:
+MiniVSFS is a tiny file system you can inspect byte by byte. It comes with three C programs:
 **`mkfs_builder`** creates an empty disk image (a single `.img` file that acts like a small
-disk), and **`mkfs_adder`** copies a file into that image.
+disk), **`mkfs_adder`** copies a file into that image, and **`mkfs_ls`** lists what's inside
+it.
 
 It's built for learning how file systems store data. Images can't be mounted; you read them
-with a hex viewer such as `xxd`.
+with `mkfs_ls`, or with a hex viewer such as `xxd` to see the actual bytes.
 
 ## Try it in 60 seconds
 
@@ -14,6 +15,7 @@ Build the tools, create an image, and add one of the sample files:
 ```bash
 gcc -O2 -std=c17 -Wall -Wextra mkfs_builder.c -o mkfs_builder
 gcc -O2 -std=c17 -Wall -Wextra mkfs_adder.c -o mkfs_adder
+gcc -O2 -std=c17 -Wall -Wextra mkfs_ls.c -o mkfs_ls
 ./mkfs_builder --image out.img --size-kib 180 --inodes 128
 ./mkfs_adder --input out.img --output out2.img --file file_8.txt
 ```
@@ -25,9 +27,33 @@ Created out.img: 45 blocks, 128 inodes, 37 data blocks free.
 Successfully added file 'file_8.txt' to filesystem.
 ```
 
-Now look inside the new image. With these settings, the root directory is in block 7. macOS
-includes `xxd`, but some Linux systems need it installed first (on Debian and Ubuntu, the
-`xxd` package):
+List what's in the new image:
+
+```bash
+./mkfs_ls --image out2.img
+```
+
+```
+out2.img: 45 blocks, 2 of 128 inodes used, 36 data blocks free
+
+INODE  TYPE      SIZE  NAME
+    1  dir        192  .
+    1  dir        192  ..
+    2  file        73  file_8.txt
+```
+
+### Explore it in the browser
+
+Open the [MiniVSFS viewer](https://mebmrauf.github.io/MiniVSFS/) and drop in `out2.img`, or open
+`viewer.html` from this repo. It shows every block as a map. Click a file to follow it from its
+name to its inode to its data, or click any block to see what it holds. Your image stays on your
+computer: the page can't send anything over the network.
+
+### See the actual bytes
+
+To see how that listing is stored, look at the raw image. With these settings, the root
+directory is in block 7. macOS includes `xxd`, but some Linux systems need it installed first
+(on Debian and Ubuntu, the `xxd` package):
 
 ```bash
 xxd -s $((7*4096)) -l 192 out2.img
@@ -114,8 +140,8 @@ blocks (152 KiB), and the root directory uses one of them.
 
 ## Usage
 
-Both tools print these options with `--help`. They exit with a non-zero code and an error
-message if something goes wrong.
+All three tools print their options with `--help`. They exit with a non-zero code and an
+error message if something goes wrong.
 
 ### Create a new image
 
@@ -142,6 +168,19 @@ The result is a fresh image containing just the root directory (`.` and `..`).
 To add several files, use each output image as the next input. Adding fails if the name
 already exists in the image or is too long, the file is missing or too large, or there's no
 free inode or data block left.
+
+### List what's in an image
+
+```bash
+./mkfs_ls --image out2.img
+```
+
+- `--image` — MiniVSFS image to list
+
+`mkfs_ls` only reads the image. It shows how much of the image is used, then each entry in the
+root directory. It stops with an error if the image is damaged, for example if its size or
+superblock checksum is wrong. It doesn't verify the checksums of individual inodes and
+directory entries.
 
 ## On-disk format
 
@@ -202,6 +241,8 @@ rejected with an error rather than accepted partially.
 |---|---|
 | `mkfs_builder.c` | Image builder implementation |
 | `mkfs_adder.c` | File-adder implementation |
+| `mkfs_ls.c` | Image-listing implementation |
+| `viewer.html` | Browser viewer for images, published at <https://mebmrauf.github.io/MiniVSFS/> |
 | `test.sh` | Checks the tools' error handling; run it with `bash test.sh` |
 | `SPECIFICATION.md` | Original assignment specification and full format details |
 | `file_8.txt`, `file_19.txt`, `file_31.txt`, `file_38.txt` | Sample files for testing `mkfs_adder` |
