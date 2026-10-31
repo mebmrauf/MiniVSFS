@@ -37,9 +37,16 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .open { display: inline-block; padding: 7px 14px; border: 1px solid var(--strong); border-radius: 6px; cursor: pointer; }
 .open:focus-within { outline: 2px solid var(--link); outline-offset: 2px; }
 .open input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-#drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 48px 20px; text-align: center; background: var(--panel); }
+button.open { background: none; }
+button.primary { background: var(--strong); border-color: var(--strong); color: var(--bg); padding: 10px 20px; }
+.actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+a { color: var(--link); }
+#drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 40px 20px; text-align: center; background: var(--panel); }
+#drop > * + * { margin-top: 14px; }
 body.dragging #drop, body.dragging #app { outline: 2px solid var(--link); outline-offset: 4px; }
-#drop pre { display: inline-block; text-align: left; margin: 12px 0 0; padding: 12px; overflow-x: auto; max-width: 100%; }
+#drop pre { display: block; width: fit-content; max-width: 100%; margin: 12px auto 0; padding: 12px; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.hint { font-size: 14px; color: var(--muted); margin: -4px 0 12px; }
+#detail { scroll-margin-top: 16px; }
 .notice { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; }
 .notice.error { background: var(--err-bg); color: var(--err-text); }
 .notice.warn { background: var(--warn-bg); color: var(--warn-text); }
@@ -91,19 +98,31 @@ pre.hex { font-size: 12px; margin: 8px 0 0; padding: 10px; border-radius: 6px; b
       <h1>MiniVSFS viewer</h1>
       <p class="muted" id="summary">See how a MiniVSFS image is laid out, block by block.</p>
     </div>
-    <label class="open">Open image<input type="file" id="picker" accept=".img"></label>
+    <div class="actions">
+      <a href="https://github.com/mebmrauf/MiniVSFS">View on GitHub</a>
+      <label class="open">Open image<input type="file" id="picker" accept=".img"></label>
+    </div>
   </div>
   <div id="notices"></div>
   <section id="drop">
-    <p><strong>Drop a MiniVSFS <code>.img</code> file here</strong>, or use Open image. It stays on this computer.</p>
-    <p class="muted" style="margin-top:12px">Don't have one? Create it with:</p>
-    <pre>./mkfs_builder --image out.img --size-kib 180 --inodes 128
+    <p>MiniVSFS is a tiny file system for learning how files are stored on a disk.</p>
+    <button class="open primary" id="sample">Try a sample image</button>
+    <p class="muted">Or drop your own <code>.img</code> file here. It stays on this computer.</p>
+    <div>
+      <p class="muted">To make your own image, run these commands, then open <code>out2.img</code> here:</p>
+      <pre>git clone https://github.com/mebmrauf/MiniVSFS.git
+cd MiniVSFS
+gcc -O2 -std=c17 mkfs_builder.c -o mkfs_builder
+gcc -O2 -std=c17 mkfs_adder.c -o mkfs_adder
+./mkfs_builder --image out.img --size-kib 180 --inodes 128
 ./mkfs_adder --input out.img --output out2.img --file file_8.txt</pre>
+    </div>
   </section>
   <div id="app" class="layout" hidden>
     <div>
       <section class="panel">
         <h2>Blocks</h2>
+        <p class="hint">Click any block to see what it holds.</p>
         <div id="map" role="group" aria-label="Blocks in this image"></div>
         <div class="legend">
           <span><i class="k-meta"></i>File system records</span>
@@ -115,6 +134,7 @@ pre.hex { font-size: 12px; margin: 8px 0 0; padding: 10px; border-radius: 6px; b
       </section>
       <section class="panel">
         <h2>Files in the root directory</h2>
+        <p class="hint">Click a file to follow it from its name to its inode to its data.</p>
         <div id="files"></div>
       </section>
     </div>
@@ -124,6 +144,17 @@ pre.hex { font-size: 12px; margin: 8px 0 0; padding: 10px; border-radius: 6px; b
 
 <!-- The parser uses no browser features, so test.sh can compare its results with mkfs_ls -->
 <script id="parser">
+// The image behind "Try a sample": the nonzero byte ranges of a real image, as [offset, base64].
+// Made with mkfs_builder (180 KiB, 128 inodes), then mkfs_adder with file_8.txt, file_19.txt and a 4 KiB+ notes.txt.
+const SAMPLE_BYTES = 184320;
+const SAMPLE_PARTS = [[0,"RlNWTQEAAAAAEAAALQAAAAAAAACAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAAACAAAAAAAAAAEAAAAAAAAAAwAAAAAAAAAEAAAAAAAAAAcAAAAAAAAAJgAAAAAAAAABAAAAAAAAAGmH5WoAAAAAAAAAANkkgYc="],[4096,"Dw=="],[8192,"Hw=="],[12289,"QAUAAAAAAAAAAABAAQAAAAAAAGmH5WoAAAAAaYflagAAAABph+VqAAAAAAc="],[12392,"BwAAAAAAAAAAAAAAAAAAAApPDBIAAAAAAIABAAAAAAAAAAAASQAAAAAAAABph+VqAAAAAGmH5WoAAAAAaYflagAAAAAI"],[12520,"BwAAAAAAAAAAAAAAAAAAALvbuOUAAAAAAIABAAAAAAAAAAAAQgAAAAAAAABph+VqAAAAAGmH5WoAAAAAaYflagAAAAAJ"],[12648,"BwAAAAAAAAAAAAAAAAAAAIk3t34AAAAAAIABAAAAAAAAAAAAaBAAAAAAAABph+VqAAAAAGmH5WoAAAAAaYflagAAAAAKAAAACw=="],[12776,"BwAAAAAAAAAAAAAAAAAAAFXUznk="],[28672,"AQAAAAIu"],[28735,"LQEAAAACLi4="],[28799,"AwIAAAABZmlsZV84LnR4dA=="],[28863,"NAMAAAABZmlsZV8xOS50eHQ="],[28927,"BQQAAAABbm90ZXMudHh0"],[28991,"MA=="],[32768,"bmFyd2hhbCBub3ZlbWJlciB3YWxydXMgcXVva2thIGtpbG8gZHJhZ29uZnJ1aXQgcXVva2thIGxpbWEgZm94dHJvdCBhbHBoYQ=="],[36864,"Z29sZiBob3RlbCBlY2hvIGVsZXBoYW50IHdhbHJ1cyBwZW5ndWluIHlhbmtlZSB4cmF5IGthbmdhcm9vIGFscGhh"],[40960,"TGluZSAwMDE6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAwMjogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDAzOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMDQ6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAwNTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDA2OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMDc6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAwODogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDA5OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMTA6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAxMTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDEyOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMTM6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAxNDogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDE1OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMTY6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAxNzogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDE4OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMTk6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAyMDogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDIxOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMjI6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAyMzogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDI0OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMjU6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAyNjogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDI3OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMjg6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAyOTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDMwOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMzE6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAzMjogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDMzOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMzQ6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAzNTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDM2OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwMzc6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDAzODogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDM5OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNDA6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA0MTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDQyOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNDM6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA0NDogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDQ1OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNDY6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA0NzogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDQ4OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNDk6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA1MDogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDUxOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNTI6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA1MzogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDU0OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNTU6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA1NjogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDU3OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNTg6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA1OTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDYwOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNjE6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA2MjogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDYzOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNjQ6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA2NTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDY2OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNjc6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA2ODogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDY5OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNzA6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA3MTogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDcyOiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4KTGluZSAwNzM6IHRoaXMgZmlsZSBpcyB0b28gYmlnIGZvciBvbmUgNDA5Ni1ieXRlIGJsb2NrLgpMaW5lIDA3NDogdGhpcyBmaWxlIGlzIHRvbyBiaWcgZm9yIG9uZSA0MDk2LWJ5dGUgYmxvY2suCkxpbmUgMDc1OiB0aGlzIGZpbGUgaXMgdG9vIGJpZyBmb3Igb25lIDQwOTYtYnl0ZSBibG9jay4K"]];
+
+function sampleImage() {
+  const image = new Uint8Array(SAMPLE_BYTES);
+  for (const [offset, data] of SAMPLE_PARTS) image.set(Uint8Array.from(atob(data), c => c.charCodeAt(0)), offset);
+  return image;
+}
+
 function parseImage(bytes) {
   const BS = 4096, INODE_SIZE = 128, DIRENT_SIZE = 64, DIRECT_MAX = 12;
   const fail = error => ({ error });
@@ -318,16 +349,20 @@ function openFile(e) {
   select(data.length ? data[0] : e.inode.block, e.ino);
 }
 
+// 16 bytes per row matches xxd, but only fits on wider screens
+const wideHex = matchMedia("(min-width: 620px)");
+
 function hexDump(block) {
+  const rowBytes = wideHex.matches ? 16 : 8;
   const start = block * img.BS, data = img.bytes.subarray(start, start + img.BS);
   let last = data.length;
   while (last > 0 && data[last - 1] === 0) last--;
   if (last === 0) return "This block is all zeros.";
-  const shown = Math.min(data.length, Math.ceil(last / 16) * 16);
+  const shown = Math.min(data.length, Math.ceil(last / rowBytes) * rowBytes);
   const lines = [];
-  for (let i = 0; i < shown; i += 16) {
+  for (let i = 0; i < shown; i += rowBytes) {
     let hex = "", text = "";
-    for (let j = 0; j < 16; j++) {
+    for (let j = 0; j < rowBytes; j++) {
       const b = data[i + j];
       hex += b.toString(16).padStart(2, "0") + (j % 2 ? " " : "");
       text += b >= 32 && b < 127 ? String.fromCharCode(b) : ".";
@@ -452,6 +487,14 @@ function drawDetail() {
     raw);
 }
 
+// On narrow screens the details sit below the map, so a click could otherwise appear to do nothing
+function revealDetail() {
+  if ($("detail").getBoundingClientRect().top > innerHeight - 160) {
+    const smooth = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    $("detail").scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+  }
+}
+
 function moveWithArrows(event) {
   const cells = [...$("map").children];
   const index = cells.indexOf(event.target);
@@ -474,14 +517,14 @@ function showImage(model, fileName) {
     class: "cell " + KIND[info.kind].css,
     title: `Block ${b}: ${KIND[info.kind].name}`,
     "aria-label": `Block ${b}: ${KIND[info.kind].name}`,
-    onclick: () => select(b, info.kind === "file" ? info.owner : null),
+    onclick: () => { select(b, info.kind === "file" ? info.owner : null); revealDetail(); },
   }, String(b))));
   $("orphan-legend").hidden = !img.blocks.some(info => info.kind === "orphan");
 
   const files = img.entries.filter(e => e.type === 1);
   $("files").replaceChildren(files.length
     ? table(["Name", "Inode", "Size", "Blocks"], files.map(e => {
-        const r = row(linkButton(e.name, () => openFile(e)), String(e.ino), `${e.inode.size} bytes`, e.inode.direct.filter(Boolean).join(", ") || "None");
+        const r = row(linkButton(e.name, () => { openFile(e); revealDetail(); }), String(e.ino), `${e.inode.size} bytes`, e.inode.direct.filter(Boolean).join(", ") || "None");
         r.dataset.ino = e.ino;
         return r;
       }))
@@ -518,11 +561,20 @@ $("picker").addEventListener("change", event => {
   if (event.target.files[0]) loadFile(event.target.files[0]);
   event.target.value = "";
 });
+$("sample").addEventListener("click", () => loadFile(new File([sampleImage()], "sample.img")));
+wideHex.addEventListener("change", () => { if (img) drawDetail(); });
 $("map").addEventListener("keydown", moveWithArrows);
-addEventListener("dragover", event => { event.preventDefault(); document.body.classList.add("dragging"); });
-addEventListener("dragleave", event => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
+// dragover repeats during a drag, and dragleave isn't reliable when one is cancelled, so clear once it stops
+let dragTimer;
+addEventListener("dragover", event => {
+  event.preventDefault();
+  document.body.classList.add("dragging");
+  clearTimeout(dragTimer);
+  dragTimer = setTimeout(() => document.body.classList.remove("dragging"), 800);
+});
 addEventListener("drop", event => {
   event.preventDefault();
+  clearTimeout(dragTimer);
   document.body.classList.remove("dragging");
   if (event.dataTransfer.files[0]) loadFile(event.dataTransfer.files[0]);
 });
