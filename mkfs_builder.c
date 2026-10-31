@@ -13,8 +13,6 @@
 #define INODE_SIZE 128u
 #define ROOT_INO 1u
 
-uint64_t g_random_seed = 0; // This should be replaced by seed value from the CLI.
-
 // below contains some basic structures you need for your project
 // you are free to create more structures as you require
 
@@ -118,7 +116,12 @@ void dirent_checksum_finalize(dirent64_t* de) {
     de->checksum = x;
 }
 
-// Modify your argument parsing section in main():
+static void print_usage(FILE *out, const char *prog) {
+    fprintf(out, "Usage: %s --image <file> --size-kib <size> --inodes <count>\n", prog);
+    fprintf(out, "  --image     output image filename\n");
+    fprintf(out, "  --size-kib  total image size in KiB: a multiple of 4, between 180 and 4096\n");
+    fprintf(out, "  --inodes    number of inodes (the most files it can hold, plus root): between 128 and 512\n");
+}
 
 int main(int argc, char **argv)
 {
@@ -127,31 +130,33 @@ int main(int argc, char **argv)
     char *image_name = NULL;
     uint64_t size_kib = 0;
     uint64_t inode_count = 0;
-    uint64_t seed_value = 0;  // Add this line
-    
+
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--image") && i + 1 < argc) {
+        if (!strcmp(argv[i], "--help")) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        } else if (!strcmp(argv[i], "--image") && i + 1 < argc) {
             image_name = argv[++i];
         } else if (!strcmp(argv[i], "--size-kib") && i + 1 < argc) {
             size_kib = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--inodes") && i + 1 < argc) {
             inode_count = strtoull(argv[++i], NULL, 10);
-        } else if (!strcmp(argv[i], "--seed") && i + 1 < argc) {  // Add this block
-            seed_value = strtoull(argv[++i], NULL, 10);
         }
     }
-    
-    // Update the global variable
-    g_random_seed = seed_value;  // Add this line
-    
-    if (!image_name || size_kib < 180 || size_kib > 4096 || size_kib % 4 != 0 || inode_count < 128 || inode_count > 512) {
-        fprintf(stderr, "Invalid arguments.\n");
-        fprintf(stderr, "Usage: %s --image <file> --size-kib <size> --inodes <count> [--seed <value>]\n", argv[0]);
+
+    const char *arg_error = NULL;
+    if (!image_name) {
+        arg_error = "--image is required";
+    } else if (size_kib < 180 || size_kib > 4096 || size_kib % 4 != 0) {
+        arg_error = "--size-kib must be a multiple of 4, between 180 and 4096";
+    } else if (inode_count < 128 || inode_count > 512) {
+        arg_error = "--inodes must be between 128 and 512";
+    }
+    if (arg_error) {
+        fprintf(stderr, "Error: %s.\n", arg_error);
+        print_usage(stderr, argv[0]);
         return 1;
     }
-    
-    // Optional: Print the seed being used for debugging
-    printf("Using seed: %lu\n", g_random_seed);
 
     uint64_t total_blocks = (size_kib * 1024) / BS;
     uint64_t inode_bitmap_start = 1;
@@ -191,14 +196,26 @@ int main(int argc, char **argv)
     // its zero-padded 4096-byte block buffer (see superblock_crc_finalize's
     // contract: it hashes BS-4 bytes, but this struct is only 116 bytes).
     
-    // Bitmaps
+    // Allocate everything before touching the disk, so running out of memory can't leave a partial image
     uint8_t *inode_bitmap = calloc(BS, 1);
     uint8_t *data_bitmap = calloc(BS, 1);
+    inode_t *inode_table = calloc(inode_table_blocks, BS); // whole blocks: the unused tail is the zero padding
+    uint64_t data_region_bytes = data_region_blocks * BS;
+    uint8_t *data_region = calloc(data_region_bytes, 1);
+    if (!inode_bitmap || !data_bitmap || !inode_table || !data_region) {
+        fprintf(stderr, "Error: not enough memory to build the image.\n");
+        free(inode_bitmap);
+        free(data_bitmap);
+        free(inode_table);
+        free(data_region);
+        return 1;
+    }
+
+    // Bitmaps
     inode_bitmap[0] |= 1; // root inode allocated
     data_bitmap[0] |= 1; // first data block allocated for root dir
     
     // Inode table
-    inode_t *inode_table = calloc(inode_count, sizeof(inode_t));
     time_t now = time(NULL);
     inode_t *root_inode = &inode_table[0];
     root_inode->mode = 040000; // directory (octal)
@@ -218,10 +235,6 @@ int main(int argc, char **argv)
     root_inode->uid16_gid16 = 0;
     root_inode->xattr_ptr = 0;
     inode_crc_finalize(root_inode);
-    
-    // Data region - need to allocate the full data region
-    uint64_t data_region_bytes = data_region_blocks * BS;
-    uint8_t *data_region = calloc(data_region_bytes, 1);
     
     // Initialize root directory entries in first block of data region
     dirent64_t *de = (dirent64_t *)data_region;
@@ -250,38 +263,36 @@ int main(int argc, char **argv)
     // Write superblock (padded to full block). Checksum must cover the full
     // zero-padded 4096-byte block (bytes 0..4091), not just the 116-byte
     // struct, so compute it here on the block buffer.
-    uint8_t *superblock_block = calloc(BS, 1);
+    uint8_t superblock_block[BS] = {0};
     memcpy(superblock_block, &superblock, sizeof(superblock_t));
     superblock_crc_finalize((superblock_t *)superblock_block);
     fwrite(superblock_block, 1, BS, f);
-    free(superblock_block);
-    
+
     // Write inode bitmap block
     fwrite(inode_bitmap, 1, BS, f);
     
     // Write data bitmap block
     fwrite(data_bitmap, 1, BS, f);
     
-    // Write inode table
-    for (uint64_t i = 0; i < inode_count; ++i) {
-        fwrite(&inode_table[i], 1, sizeof(inode_t), f);
-    }
-    // Pad inode table to block size
-    uint64_t inode_table_bytes = inode_count * sizeof(inode_t);
-    uint64_t inode_table_pad = inode_table_blocks * BS - inode_table_bytes;
-    if (inode_table_pad) {
-        uint8_t *pad = calloc(inode_table_pad, 1);
-        fwrite(pad, 1, inode_table_pad, f);
-        free(pad);
-    }
-    
+    // Write inode table, including the padding to a whole block
+    fwrite(inode_table, 1, inode_table_blocks * BS, f);
+
     // Write entire data region
     fwrite(data_region, 1, data_region_bytes, f);
     
-    fclose(f);
+    // stdio errors are sticky, so this one check covers every write above
+    int write_failed = ferror(f);
+    if (fclose(f) != 0) write_failed = 1;
     free(inode_bitmap);
     free(data_bitmap);
     free(inode_table);
     free(data_region);
+    if (write_failed) {
+        fprintf(stderr, "Error: could not write '%s' (is the disk full?). Removed the incomplete image.\n", image_name);
+        remove(image_name);
+        return 1;
+    }
+    printf("Created %s: %" PRIu64 " blocks, %" PRIu64 " inodes, %" PRIu64 " data blocks free.\n",
+           image_name, total_blocks, inode_count, data_region_blocks - 1);
     return 0;
 }
