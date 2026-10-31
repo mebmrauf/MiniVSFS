@@ -1,26 +1,154 @@
 # MiniVSFS
 
-MiniVSFS is a small, inode-based file system format (modeled after VSFS) along with two C
-programs that create and modify raw disk images for it:
+MiniVSFS is a tiny file system you can inspect byte by byte. It comes with two C programs:
+**`mkfs_builder`** creates an empty disk image (a single `.img` file that acts like a small
+disk), and **`mkfs_adder`** copies a file into that image.
 
-- **`mkfs_builder`** — builds a fresh MiniVSFS image from scratch (superblock, bitmaps,
-  inode table, root directory).
-- **`mkfs_adder`** — takes an existing MiniVSFS image and a file from the working
-  directory, and adds that file into the root (`/`) directory of the image.
+It's built for learning how file systems store data. Images can't be mounted; you read them
+with a hex viewer such as `xxd`.
 
-Both tools emit byte-exact, little-endian `.img` binary files that can be inspected with
-tools like `xxd` or `hexdump`.
+## Try it in 60 seconds
 
-## Design
+Build the tools, create an image, and add one of the sample files:
 
-MiniVSFS deliberately cuts a few corners compared to a full VSFS implementation:
+```bash
+gcc -O2 -std=c17 -Wall -Wextra mkfs_builder.c -o mkfs_builder
+gcc -O2 -std=c17 -Wall -Wextra mkfs_adder.c -o mkfs_adder
+./mkfs_builder --image out.img --size-kib 180 --inodes 128
+./mkfs_adder --input out.img --output out2.img --file file_8.txt
+```
 
-- No indirect block pointers — only 12 direct blocks per inode.
-- Only the root (`/`) directory is supported; no subdirectories.
-- Exactly one block each for the inode bitmap and the data bitmap.
-- Fixed, limited ranges for image size and inode count (see below).
+You should see:
 
-### On-disk layout
+```
+Created out.img: 45 blocks, 128 inodes, 37 data blocks free.
+Successfully added file 'file_8.txt' to filesystem.
+```
+
+Now look inside the new image. With these settings, the root directory is in block 7. macOS
+includes `xxd`, but some Linux systems need it installed first (on Debian and Ubuntu, the
+`xxd` package):
+
+```bash
+xxd -s $((7*4096)) -l 192 out2.img
+```
+
+Each directory entry takes 64 bytes, which is 4 lines of output. There are three entries:
+`.`, `..`, and the file you added.
+
+```
+00007000: 0100 0000 022e 0000 0000 0000 0000 0000  ................   <- "." (inode 1)
+00007010: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+00007020: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+00007030: 0000 0000 0000 0000 0000 0000 0000 002d  ...............-
+00007040: 0100 0000 022e 2e00 0000 0000 0000 0000  ................   <- ".." (inode 1)
+00007050: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+00007060: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+00007070: 0000 0000 0000 0000 0000 0000 0000 0003  ................
+00007080: 0200 0000 0166 696c 655f 382e 7478 7400  .....file_8.txt.   <- file_8.txt (inode 2)
+00007090: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+000070a0: 0000 0000 0000 0000 0000 0000 0000 0000  ................
+000070b0: 0000 0000 0000 0000 0000 0000 0000 0034  ...............4
+```
+
+In each entry, the first 4 bytes are the inode number, the next byte is the type (`01` = file,
+`02` = directory), then comes the name, and the last byte is a checksum.
+
+The file's contents are in the next block:
+
+```bash
+xxd -s $((8*4096)) -l 80 out2.img
+```
+
+```
+00008000: 6e61 7277 6861 6c20 6e6f 7665 6d62 6572  narwhal november
+00008010: 2077 616c 7275 7320 7175 6f6b 6b61 206b   walrus quokka k
+00008020: 696c 6f20 6472 6167 6f6e 6672 7569 7420  ilo dragonfruit 
+00008030: 7175 6f6b 6b61 206c 696d 6120 666f 7874  quokka lima foxt
+00008040: 726f 7420 616c 7068 6100 0000 0000 0000  rot alpha.......
+```
+
+## How it works
+
+The image is divided into 4096-byte **blocks**, and each part of the file system has a job:
+
+| Part | What it does |
+|---|---|
+| **Superblock** | Describes the image: its size and where every other part starts. |
+| **Inode bitmap** | Records which inodes are in use, one bit per inode. |
+| **Data bitmap** | Records which data blocks are in use, one bit per block. |
+| **Inode table** | Holds the inodes. An **inode** is a file's record: its size, its timestamps, and which blocks hold its data. It doesn't contain the file's name. |
+| **Data region** | Holds file contents and directories. A **directory** is a list of names, each pointing to an inode. |
+
+### What happens when you add a file
+
+Adding `file_8.txt` to the image from the demo takes these steps:
+
+1. `mkfs_adder` checks the root directory to make sure the name isn't already taken.
+2. It finds the first free inode in the inode bitmap, which is inode 2, and marks it as used.
+3. It finds the first free data block in the data bitmap, which is block 8, and marks it as
+   used.
+4. It copies the file's contents into block 8.
+5. It fills in inode 2 with the file's size and timestamps, and points it to block 8.
+6. It adds an entry to the root directory linking the name `file_8.txt` to inode 2.
+7. It updates the root directory's inode and saves everything to the output image.
+
+If any check fails, no output image is created. If saving fails partway, for example on a
+full disk, the incomplete output image is removed. The input image and the file being added
+are never changed, because `--output` must be a different file from both.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Largest file | 48 KiB (12 blocks); larger files are rejected |
+| Number of files | One less than `--inodes`, because the root directory uses one inode |
+| File name length | 57 characters; longer names are rejected |
+| Directories | Root (`/`) only, with no subdirectories |
+| Image size | 180–4096 KiB, in multiples of 4 |
+| Inode count | 128–512 |
+
+The space for files is smaller than the image size, because the superblock, the bitmaps and
+the inode table take up blocks too. For example, a 180 KiB image with 128 inodes has 38 data
+blocks (152 KiB), and the root directory uses one of them.
+
+## Usage
+
+Both tools print these options with `--help`. They exit with a non-zero code and an error
+message if something goes wrong.
+
+### Create a new image
+
+```bash
+./mkfs_builder --image out.img --size-kib <180..4096> --inodes <128..512>
+```
+
+- `--image` — output image filename
+- `--size-kib` — total image size in KiB (multiple of 4, 180–4096)
+- `--inodes` — number of inodes (128–512)
+
+The result is a fresh image containing just the root directory (`.` and `..`).
+
+### Add a file to an image
+
+```bash
+./mkfs_adder --input out.img --output out2.img --file <file>
+```
+
+- `--input` — existing MiniVSFS image
+- `--output` — filename for the updated image; must be different from `--input` and `--file`
+- `--file` — name of a file in the current directory; paths such as `dir/a.txt` are rejected
+
+To add several files, use each output image as the next input. Adding fails if the name
+already exists in the image or is too long, the file is missing or too large, or there's no
+free inode or data block left.
+
+## On-disk format
+
+This section is the reference for reading images byte by byte. All values are little-endian.
+For the complete format, see [SPECIFICATION.md](SPECIFICATION.md).
+
+### Layout
 
 Each block is 4096 bytes. The image is laid out as:
 
@@ -68,48 +196,12 @@ zero-padded at the tail.
 Inodes and data blocks are allocated **first-fit**. Files that need more than 12 blocks are
 rejected with an error rather than accepted partially.
 
-## Build
-
-```bash
-gcc -O2 -std=c17 -Wall -Wextra mkfs_builder.c -o mkfs_builder
-gcc -O2 -std=c17 -Wall -Wextra mkfs_adder.c  -o mkfs_adder
-```
-
-## Usage
-
-### Create a new image
-
-```bash
-./mkfs_builder --image out.img --size-kib <180..4096> --inodes <128..512>
-```
-
-- `--image` — output image filename
-- `--size-kib` — total image size in KiB (multiple of 4, 180–4096)
-- `--inodes` — number of inodes (128–512)
-
-The result is a fresh image containing just the root directory (`.` and `..`).
-
-### Add a file to an image
-
-```bash
-./mkfs_adder --input out.img --output out2.img --file <file>
-```
-
-- `--input` — existing MiniVSFS image
-- `--output` — filename for the updated image
-- `--file` — file (from the current working directory) to add to root
-
-`mkfs_adder` looks up a free inode and enough free data blocks (first-fit, max 12 direct
-blocks), writes the file's contents, adds a directory entry in root, and updates root's
-metadata (`links`, `size_bytes`, `mtime`/`ctime`). It exits non-zero on any failure
-(duplicate filename, missing file, no free inode/blocks, file too large, etc.) and leaves
-the input image untouched.
-
 ## Repository contents
 
 | File | Description |
 |---|---|
 | `mkfs_builder.c` | Image builder implementation |
 | `mkfs_adder.c` | File-adder implementation |
-| `SPECIFICATION.md` | Full project specification |
+| `test.sh` | Checks the tools' error handling; run it with `bash test.sh` |
+| `SPECIFICATION.md` | Original assignment specification and full format details |
 | `file_8.txt`, `file_19.txt`, `file_31.txt`, `file_38.txt` | Sample files for testing `mkfs_adder` |

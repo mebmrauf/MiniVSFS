@@ -1,15 +1,17 @@
 #define _FILE_OFFSET_BITS 64
 #include <stdio.h>
 #include <stdint.h>
-#include <string.h>    // For memcpy, memset, strcmp, strncpy
+#include <inttypes.h>  // For PRIu64
+#include <string.h>    // For memcpy, memset, strcmp, strncpy, strchr
 #include <stdlib.h>    // For calloc, free
 #include <time.h>      // For time_t and time()
-#include <stdbool.h>   // For bool, true, false
+#include <sys/stat.h>  // For stat
 
 #define BS 4096u
 #define INODE_SIZE 128u
 #define ROOT_INO 1u
 #define DIRECT_MAX 12
+#define NAME_MAX_LEN 57 // name field is 58 bytes, including the terminating NUL
 #pragma pack(push, 1)
 
 typedef struct {
@@ -111,13 +113,30 @@ void dirent_checksum_finalize(dirent64_t* de) {
     de->checksum = x;
 }
 
+// Compares the files themselves, so ./out.img and links to out.img also match
+static int same_file(const char *a, const char *b) {
+    struct stat a_stat, b_stat;
+    return stat(a, &a_stat) == 0 && stat(b, &b_stat) == 0 &&
+           a_stat.st_dev == b_stat.st_dev && a_stat.st_ino == b_stat.st_ino;
+}
+
+static void print_usage(FILE *out, const char *prog) {
+    fprintf(out, "Usage: %s --input <image> --output <image> --file <name>\n", prog);
+    fprintf(out, "  --input   existing MiniVSFS image (left unchanged)\n");
+    fprintf(out, "  --output  filename for the updated image; must be different from --input and --file\n");
+    fprintf(out, "  --file    name of a file in the current directory: name up to 57 characters, size up to 48 KiB\n");
+}
+
 int main(int argc, char **argv) {
     crc32_init();
     // Parse CLI arguments
     int rc = 0; // exit code; set to 1 on any error path before "goto cleanup"
     char *input_img = NULL, *output_img = NULL, *add_file = NULL;
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--input") && i + 1 < argc) {
+        if (!strcmp(argv[i], "--help")) {
+            print_usage(stdout, argv[0]);
+            return 0;
+        } else if (!strcmp(argv[i], "--input") && i + 1 < argc) {
             input_img = argv[++i];
         } else if (!strcmp(argv[i], "--output") && i + 1 < argc) {
             output_img = argv[++i];
@@ -126,10 +145,29 @@ int main(int argc, char **argv) {
         }
     }
     if (!input_img || !output_img || !add_file) {
-        fprintf(stderr, "Invalid arguments.\n");
+        fprintf(stderr, "Error: --input, --output and --file are all required.\n");
+        print_usage(stderr, argv[0]);
         return 1;
     }
-    
+    // The name is stored as-is in root, and MiniVSFS has no subdirectories
+    if (strchr(add_file, '/')) {
+        fprintf(stderr, "Error: --file must be a name in the current directory, not a path: '%s'.\n", add_file);
+        return 1;
+    }
+    // Cutting names short could make two different files look identical
+    if (strlen(add_file) > NAME_MAX_LEN) {
+        fprintf(stderr, "Error: file name '%s' is too long (limit is %d characters).\n", add_file, NAME_MAX_LEN);
+        return 1;
+    }
+    if (same_file(input_img, output_img)) {
+        fprintf(stderr, "Error: --output must be different from --input, so the input image is kept.\n");
+        return 1;
+    }
+    if (same_file(add_file, output_img)) {
+        fprintf(stderr, "Error: --output must be different from --file, so the file being added is kept.\n");
+        return 1;
+    }
+
     // Open input image
     FILE *fin = fopen(input_img, "rb");
     if (!fin) { 
@@ -235,7 +273,8 @@ int main(int argc, char **argv) {
     // Check if file fits in 12 direct blocks
     uint64_t blocks_needed = (file_size + BS - 1) / BS;
     if (blocks_needed > DIRECT_MAX) {
-        fprintf(stderr, "File too large for MiniVSFS.\n");
+        fprintf(stderr, "Error: '%s' is %" PRIu64 " bytes, but MiniVSFS files can be at most %u bytes (48 KiB).\n",
+                add_file, file_size, DIRECT_MAX * BS);
         fclose(ffile);
         rc = 1;
         goto cleanup;
@@ -326,7 +365,6 @@ int main(int argc, char **argv) {
     // Find a free directory entry across all allocated blocks
     int dirent_idx = -1;
     dirent64_t *target_dir = NULL;
-    bool allocated_new_block = false;
 
     // Check existing allocated blocks first
     for (int b = 0; b < 12 && root_inode->direct[b] != 0; ++b) {
@@ -387,7 +425,6 @@ int main(int argc, char **argv) {
         // Set up for adding entry to the new block
         target_dir = (dirent64_t *)(data_region + new_data_block * BS);
         dirent_idx = 0; // First entry in the new block
-        allocated_new_block = true;
     }
 
     // Add new directory entry
@@ -434,6 +471,7 @@ int main(int argc, char **argv) {
     if (!superblock_block) {
         fprintf(stderr, "Memory allocation failed.\n");
         fclose(fout);
+        remove(output_img);
         rc = 1;
         goto cleanup;
     }
@@ -451,6 +489,7 @@ int main(int argc, char **argv) {
         fwrite(&inode_table[i], 1, sizeof(inode_t), fout);
     }
     // Pad inode table to block size
+    int write_failed = 0;
     uint64_t inode_table_bytes = superblock.inode_count * sizeof(inode_t);
     uint64_t inode_table_pad = superblock.inode_table_blocks * BS - inode_table_bytes;
     if (inode_table_pad) {
@@ -458,13 +497,24 @@ int main(int argc, char **argv) {
         if (pad) {
             fwrite(pad, 1, inode_table_pad, fout);
             free(pad);
+        } else {
+            write_failed = 1; // a missing pad would shift the data region
         }
     }
-    
+
     // Write data region
     fwrite(data_region, 1, data_region_bytes, fout);
-    fclose(fout);
-    
+
+    // stdio errors are sticky, so this one check covers every write above
+    if (ferror(fout)) write_failed = 1;
+    if (fclose(fout) != 0) write_failed = 1;
+    if (write_failed) {
+        fprintf(stderr, "Error: could not write '%s' (is the disk full?). Removed the incomplete image.\n", output_img);
+        remove(output_img);
+        rc = 1;
+        goto cleanup;
+    }
+
     printf("Successfully added file '%s' to filesystem.\n", add_file);
     
 cleanup:

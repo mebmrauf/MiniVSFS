@@ -1,5 +1,8 @@
 # MiniVSFS: A C-based VSFS Image Generator — Full Specification
 
+> **Note:** This is the original course assignment, so "you", "skeleton" and "your group ID"
+> refer to that assignment. To use the tools, start with the [README](README.md).
+
 ## 1. Overview
 
 This project implements two C programs for a small, inode-based file system called
@@ -105,7 +108,7 @@ Placed on the first block (block 0) of the image:
 | `root_inode` | 8 | `1` |
 | `mtime_epoch` | 8 | Build time (Unix epoch) |
 | `flags` | 4 | `0` |
-| `checksum` | 4 | See §6 (Checksum) |
+| `checksum` | 4 | See §5 (Checksum) |
 
 Skeleton struct: `superblock_t`.
 
@@ -115,8 +118,8 @@ Skeleton struct: `superblock_t`.
 
 | Field | Size (bytes) | Default |
 |---|---|---|
-| `mode` | 2 | See §5.1 (Inode Modes) |
-| `links` | 2 | See §5.2 (Links) |
+| `mode` | 2 | See §4.3.1 (Inode Modes) |
+| `links` | 2 | See §4.3.2 (Links) |
 | `uid` | 4 | `0` |
 | `gid` | 4 | `0` |
 | `size_bytes` | 8 | — |
@@ -130,7 +133,7 @@ Skeleton struct: `superblock_t`.
 | `proj_id` | 4 | Your group ID |
 | `uid16_gid16` | 4 | `0` |
 | `xattr_ptr` | 8 | `0` |
-| `inode_crc` | 8 | See §6 (Checksum) |
+| `inode_crc` | 8 | See §5 (Checksum) |
 
 Twelve direct blocks are allowed. **Elements inside the `direct` array are absolute data
 block numbers** (i.e. the actual block number on disk, not an index relative to the data
@@ -141,14 +144,14 @@ their index in the inode table. The superblock's `root_inode` field is `1` becau
 inodes are **1-indexed**: add 1 to an inode's table index to get its inode number. Unused
 direct-block slots are simply set to `0`.
 
-#### 5.1 Inode Modes
+#### 4.3.1 Inode Modes
 
 | Type | Octal mode |
 |---|---|
 | File | `0100000` |
 | Directory | `0040000` |
 
-#### 5.2 Links
+#### 4.3.2 Links
 
 `links` counts the number of directories that point to the file/directory:
 
@@ -173,7 +176,7 @@ Each directory entry:
 | `inode_no` | 4 | `0` if free |
 | `type` | 1 | `1` = file, `2` = dir |
 | `name` | 58 | — |
-| `checksum` | 1 | See §6 (Checksum) |
+| `checksum` | 1 | See §5 (Checksum) |
 
 Skeleton struct: `dirent64_t`.
 
