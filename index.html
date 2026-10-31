@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- No network access: images are read in the browser and never leave this computer -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>MiniVSFS Viewer</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf7; --panel: #ffffff; --text: #24231f; --muted: #66645c; --line: #dedcd3; --strong: #24231f;
+  --meta: #d3d1c7; --meta-text: #2c2c2a;
+  --dir: #afa9ec; --dir-text: #26215c;
+  --file: #5dcaa5; --file-text: #04342c;
+  --orphan: #f5c4b3; --orphan-text: #712b13;
+  --warn-bg: #faeeda; --warn-text: #633806; --err-bg: #fcebeb; --err-text: #791f1f; --link: #185fa5;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b19; --panel: #252523; --text: #efeee8; --muted: #b0aea5; --line: #41413d; --strong: #efeee8;
+    --link: #85b7eb; --warn-bg: #412402; --warn-text: #fac775; --err-bg: #501313; --err-text: #f7c1c1;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1160px; margin: 0 auto; padding: 24px 16px 48px; }
+h1 { font-size: 24px; margin: 0; font-weight: 600; }
+h2 { font-size: 16px; margin: 0 0 10px; font-weight: 600; }
+p { margin: 0; }
+.muted { color: var(--muted); }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+.top { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.open { display: inline-block; padding: 7px 14px; border: 1px solid var(--strong); border-radius: 6px; cursor: pointer; }
+.open:focus-within { outline: 2px solid var(--link); outline-offset: 2px; }
+.open input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+#drop { border: 1.5px dashed var(--line); border-radius: 10px; padding: 48px 20px; text-align: center; background: var(--panel); }
+body.dragging #drop, body.dragging #app { outline: 2px solid var(--link); outline-offset: 4px; }
+#drop pre { display: inline-block; text-align: left; margin: 12px 0 0; padding: 12px; overflow-x: auto; max-width: 100%; }
+.notice { padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; }
+.notice.error { background: var(--err-bg); color: var(--err-text); }
+.notice.warn { background: var(--warn-bg); color: var(--warn-text); }
+.notice ul { margin: 4px 0 0; padding-left: 20px; }
+.layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 1120px) {
+  .layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); align-items: start; }
+  #detail { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+}
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+.layout > .panel, .layout > div > .panel:last-child { margin-bottom: 0; }
+#map { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 4px; }
+.cell { height: 30px; min-width: 0; padding: 0; border-radius: 4px; border: 1px solid transparent; font-size: 12px; font-variant-numeric: tabular-nums; }
+.k-meta { background: var(--meta); color: var(--meta-text); }
+.k-dir { background: var(--dir); color: var(--dir-text); }
+.k-file { background: var(--file); color: var(--file-text); }
+.k-orphan { background: var(--orphan); color: var(--orphan-text); }
+.k-free { background: transparent; color: var(--muted); border-color: var(--line); }
+#map.has-chain .cell:not(.in-chain) { opacity: .4; }
+.cell.selected { outline: 2px solid var(--strong); outline-offset: 1px; opacity: 1 !important; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.legend i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.legend i.k-free { border: 1px solid var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 13px; white-space: nowrap; }
+#files td:first-child { min-width: 120px; }
+#files td:nth-child(2), #files td:nth-child(3) { white-space: nowrap; }
+th, td { padding: 5px 8px 5px 0; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+tr:last-child td { border-bottom: none; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.link { background: none; border: none; padding: 0; color: var(--link); text-decoration: underline; text-underline-offset: 2px; text-align: left; overflow-wrap: anywhere; }
+tr.current td { font-weight: 600; }
+.chain { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 14px; }
+.step { padding: 3px 9px; border-radius: 5px; border: none; font-size: 13px; }
+.step.current { outline: 2px solid var(--strong); outline-offset: 1px; }
+.bad { color: var(--err-text); background: var(--err-bg); padding: 0 5px; border-radius: 4px; }
+.bits { display: grid; grid-template-columns: repeat(auto-fill, 12px); gap: 2px; margin: 10px 0; }
+.bits span { height: 12px; border-radius: 2px; border: 1px solid var(--line); }
+.bits span.on { background: var(--strong); border-color: var(--strong); }
+details { margin-top: 14px; }
+summary { cursor: pointer; color: var(--muted); }
+pre.hex { font-size: 12px; margin: 8px 0 0; padding: 10px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); overflow: auto; max-height: 320px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <h1>MiniVSFS viewer</h1>
+      <p class="muted" id="summary">See how a MiniVSFS image is laid out, block by block.</p>
+    </div>
+    <label class="open">Open image<input type="file" id="picker" accept=".img"></label>
+  </div>
+  <div id="notices"></div>
+  <section id="drop">
+    <p><strong>Drop a MiniVSFS <code>.img</code> file here</strong>, or use Open image. It stays on this computer.</p>
+    <p class="muted" style="margin-top:12px">Don't have one? Create it with:</p>
+    <pre>./mkfs_builder --image out.img --size-kib 180 --inodes 128
+./mkfs_adder --input out.img --output out2.img --file file_8.txt</pre>
+  </section>
+  <div id="app" class="layout" hidden>
+    <div>
+      <section class="panel">
+        <h2>Blocks</h2>
+        <div id="map" role="group" aria-label="Blocks in this image"></div>
+        <div class="legend">
+          <span><i class="k-meta"></i>File system records</span>
+          <span><i class="k-dir"></i>Root directory</span>
+          <span><i class="k-file"></i>File contents</span>
+          <span><i class="k-free"></i>Free</span>
+          <span id="orphan-legend" hidden><i class="k-orphan"></i>In use, no file points to it</span>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Files in the root directory</h2>
+        <div id="files"></div>
+      </section>
+    </div>
+    <section class="panel" id="detail" aria-live="polite"></section>
+  </div>
+</main>
+
+<!-- The parser uses no browser features, so test.sh can compare its results with mkfs_ls -->
+<script id="parser">
+function parseImage(bytes) {
+  const BS = 4096, INODE_SIZE = 128, DIRENT_SIZE = 64, DIRECT_MAX = 12;
+  const fail = error => ({ error });
+  if (bytes.length < BS) return fail("This file is too short to be a MiniVSFS image.");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.length);
+  const u16 = o => view.getUint16(o, true), u32 = o => view.getUint32(o, true);
+  // Values too large to be exact become Infinity, which every range check below rejects
+  const u64 = o => { const x = view.getBigUint64(o, true); return x > BigInt(Number.MAX_SAFE_INTEGER) ? Infinity : Number(x); };
+
+  const crcTable = Array.from({ length: 256 }, (_, i) => {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  });
+  const crc32 = data => {
+    let c = 0xFFFFFFFF;
+    for (const b of data) c = crcTable[(c ^ b) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  };
+
+  if (u32(0) !== 0x4D565346 || u32(4) !== 1 || u32(8) !== BS) return fail("This file isn't a MiniVSFS image.");
+  const sb = {
+    magic: u32(0), version: u32(4), block_size: u32(8), total_blocks: u64(12), inode_count: u64(20),
+    inode_bitmap_start: u64(28), inode_bitmap_blocks: u64(36), data_bitmap_start: u64(44), data_bitmap_blocks: u64(52),
+    inode_table_start: u64(60), inode_table_blocks: u64(68), data_region_start: u64(76), data_region_blocks: u64(84),
+    root_inode: u64(92), mtime_epoch: u64(100), flags: u32(108), checksum: u32(112),
+  };
+  const sbCopy = bytes.slice(0, BS - 4);
+  sbCopy.fill(0, 112, 116);
+  if (crc32(sbCopy) !== sb.checksum) return fail("This image is damaged: the superblock checksum doesn't match.");
+
+  const total = sb.total_blocks;
+  if (!(total >= 45 && total <= 1024)) return fail("This image is damaged: its total block count is out of range.");
+  if (!(sb.inode_count >= 128 && sb.inode_count <= 512)) return fail("This image is damaged: its inode count is out of range.");
+  if (!(sb.inode_bitmap_start < total && sb.data_bitmap_start < total)) return fail("This image is damaged: a bitmap is outside the image.");
+  if (!(sb.inode_table_start < total && sb.inode_table_blocks <= total - sb.inode_table_start)) return fail("This image is damaged: the inode table is outside the image.");
+  if (sb.inode_count * INODE_SIZE > sb.inode_table_blocks * BS) return fail("This image is damaged: the inode table is too small.");
+  if (!(sb.data_region_start < total && sb.data_region_blocks <= total - sb.data_region_start)) return fail("This image is damaged: the data region is outside the image.");
+  if (bytes.length !== total * BS) return fail("This image is damaged: its size doesn't match its superblock.");
+
+  const bitSet = (start, i) => (bytes[start * BS + (i >> 3)] >> (i & 7)) & 1;
+  const inDataRegion = b => b >= sb.data_region_start && b < sb.data_region_start + sb.data_region_blocks;
+  const warnings = [];
+
+  const readInode = ino => {
+    const o = sb.inode_table_start * BS + (ino - 1) * INODE_SIZE;
+    const copy = bytes.slice(o, o + 120);
+    const direct = [];
+    for (let i = 0; i < DIRECT_MAX; i++) direct.push(u32(o + 44 + i * 4));
+    return {
+      ino, mode: u16(o), links: u16(o + 2), size: u64(o + 12), mtime: u64(o + 28), direct,
+      block: sb.inode_table_start + Math.floor((ino - 1) * INODE_SIZE / BS),
+      checksumOk: crc32(copy) === u32(o + 120),
+    };
+  };
+
+  // Label each block. Metadata is written last, so it wins if a damaged image overlaps regions.
+  const blocks = Array.from({ length: total }, () => ({ kind: "other" }));
+  for (let i = 0; i < sb.data_region_blocks; i++) {
+    blocks[sb.data_region_start + i] = { kind: bitSet(sb.data_bitmap_start, i) ? "orphan" : "free" };
+  }
+
+  const root = readInode(1);
+  if (!(root.mode & 0o40000)) warnings.push("The root inode isn't marked as a directory.");
+
+  const entries = [];
+  const decoder = new TextDecoder();
+  for (const b of root.direct) {
+    if (b === 0) break;
+    if (!inDataRegion(b)) {
+      warnings.push(`The root directory points to block ${b}, which is outside the data region.`);
+      break;
+    }
+    blocks[b] = { kind: "dir", owner: 1 };
+    for (let slot = 0; slot < BS / DIRENT_SIZE; slot++) {
+      const o = b * BS + slot * DIRENT_SIZE;
+      const ino = u32(o);
+      if (ino === 0) continue;
+      if (ino > sb.inode_count) {
+        warnings.push(`Block ${b} has a directory entry with invalid inode number ${ino}.`);
+        continue;
+      }
+      let end = o + 5;
+      while (end < o + 63 && bytes[end] !== 0) end++;
+      let xor = 0;
+      for (let i = 0; i < 63; i++) xor ^= bytes[o + i];
+      entries.push({
+        ino, type: bytes[o + 4], block: b, slot, offset: o,
+        name: decoder.decode(bytes.subarray(o + 5, end)).replace(/[\u0000-\u001f\u007f]/g, "?"),
+        checksumOk: xor === bytes[o + 63], inode: readInode(ino),
+      });
+    }
+  }
+
+  for (const e of entries) {
+    if (e.type !== 1) continue;
+    e.inode.direct.forEach(b => {
+      if (b === 0) return;
+      if (inDataRegion(b)) blocks[b] = { kind: "file", owner: e.ino };
+      else warnings.push(`${e.name} points to block ${b}, which is outside the data region.`);
+    });
+  }
+  for (const e of entries) {
+    if (!e.checksumOk) warnings.push(`The directory entry for ${e.name} has a bad checksum.`);
+    if (!e.inode.checksumOk && !warnings.includes(`Inode ${e.ino} has a bad checksum.`)) warnings.push(`Inode ${e.ino} has a bad checksum.`);
+  }
+
+  blocks[0] = { kind: "super" };
+  blocks[sb.inode_bitmap_start] = { kind: "inodeBitmap" };
+  blocks[sb.data_bitmap_start] = { kind: "dataBitmap" };
+  for (let i = 0; i < sb.inode_table_blocks; i++) blocks[sb.inode_table_start + i] = { kind: "inodeTable" };
+
+  let inodesUsed = 0, blocksUsed = 0;
+  for (let i = 0; i < sb.inode_count; i++) inodesUsed += bitSet(sb.inode_bitmap_start, i);
+  for (let i = 0; i < sb.data_region_blocks; i++) blocksUsed += bitSet(sb.data_bitmap_start, i);
+
+  return { sb, blocks, entries, warnings, inodesUsed, blocksFree: sb.data_region_blocks - blocksUsed, bitSet, BS, INODE_SIZE, bytes };
+}
+</script>
+
+<script>
+const $ = id => document.getElementById(id);
+
+// Everything from an image goes in as text, never as HTML, so a crafted file name can't run code
+function el(tag, props = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "onclick") node.onclick = v;
+    else if (k === "class") node.className = v;
+    else node.setAttribute(k, v);
+  }
+  node.append(...children.filter(c => c !== null && c !== undefined));
+  return node;
+}
+
+const KIND = {
+  super: { css: "k-meta", name: "Superblock" },
+  inodeBitmap: { css: "k-meta", name: "Inode bitmap" },
+  dataBitmap: { css: "k-meta", name: "Data bitmap" },
+  inodeTable: { css: "k-meta", name: "Inode table" },
+  dir: { css: "k-dir", name: "Root directory" },
+  file: { css: "k-file", name: "File contents" },
+  orphan: { css: "k-orphan", name: "In use, no file points to it" },
+  free: { css: "k-free", name: "Free" },
+  other: { css: "k-free", name: "Unused by the layout" },
+};
+
+let img = null;
+let selection = { block: 0, ino: null };
+
+function select(block, ino = null) {
+  selection = { block, ino };
+  draw();
+}
+
+function entryFor(ino) {
+  return img.entries.find(e => e.ino === ino && e.type === 1);
+}
+
+function fileBlocks(e) {
+  return e.inode.direct.filter(b => img.blocks[b] && img.blocks[b].owner === e.ino);
+}
+
+// The blocks to highlight: the directory entry, the inode, and the data
+function chainBlocks() {
+  const e = selection.ino && entryFor(selection.ino);
+  return e ? new Set([e.block, e.inode.block, ...fileBlocks(e)]) : null;
+}
+
+function draw() {
+  const chain = chainBlocks();
+  $("map").classList.toggle("has-chain", !!chain);
+  [...$("map").children].forEach((cell, b) => {
+    const selected = b === selection.block;
+    cell.classList.toggle("selected", selected);
+    cell.classList.toggle("in-chain", !!chain && chain.has(b));
+    cell.setAttribute("aria-pressed", selected);
+    cell.tabIndex = selected ? 0 : -1;
+  });
+  [...$("files").querySelectorAll("tr[data-ino]")].forEach(row => {
+    row.classList.toggle("current", Number(row.dataset.ino) === selection.ino);
+  });
+  drawDetail();
+}
+
+function linkButton(text, onclick) {
+  return el("button", { class: "link", onclick }, text);
+}
+
+function openFile(e) {
+  const data = fileBlocks(e);
+  select(data.length ? data[0] : e.inode.block, e.ino);
+}
+
+function hexDump(block) {
+  const start = block * img.BS, data = img.bytes.subarray(start, start + img.BS);
+  let last = data.length;
+  while (last > 0 && data[last - 1] === 0) last--;
+  if (last === 0) return "This block is all zeros.";
+  const shown = Math.min(data.length, Math.ceil(last / 16) * 16);
+  const lines = [];
+  for (let i = 0; i < shown; i += 16) {
+    let hex = "", text = "";
+    for (let j = 0; j < 16; j++) {
+      const b = data[i + j];
+      hex += b.toString(16).padStart(2, "0") + (j % 2 ? " " : "");
+      text += b >= 32 && b < 127 ? String.fromCharCode(b) : ".";
+    }
+    lines.push((start + i).toString(16).padStart(8, "0") + ": " + hex + " " + text);
+  }
+  if (shown < data.length) lines.push(`The remaining ${data.length - shown} bytes are zeros.`);
+  return lines.join("\n");
+}
+
+function statusText(ok) {
+  return ok ? "OK" : el("span", { class: "bad" }, "Bad");
+}
+
+function table(headers, rows) {
+  return el("table", {},
+    el("thead", {}, el("tr", {}, ...headers.map(h => el("th", { scope: "col" }, h)))),
+    el("tbody", {}, ...rows));
+}
+
+function row(...cells) {
+  return el("tr", {}, ...cells.map(c => el("td", {}, c)));
+}
+
+function formatTime(seconds) {
+  if (!Number.isFinite(seconds) || seconds > 8.64e12) return "Invalid";
+  return new Date(seconds * 1000).toLocaleString();
+}
+
+function chainView(e) {
+  const data = fileBlocks(e);
+  const step = (label, css, block) => el("button", {
+    class: "step " + css + (block === selection.block ? " current" : ""),
+    onclick: () => select(block, e.ino),
+  }, label);
+  return el("div", { class: "chain", "aria-label": "How this file is found" },
+    step(`Name: ${e.name}`, "k-dir", e.block), "→",
+    step(`Inode ${e.ino}`, "k-meta", e.inode.block), "→",
+    ...(data.length ? data.map(b => step(`Block ${b}`, "k-file", b)) : [el("span", { class: "muted" }, "no data blocks")]));
+}
+
+function detailBody(block, info) {
+  const { sb } = img;
+  switch (info.kind) {
+    case "super":
+      return [
+        el("p", { class: "muted" }, "Describes the image: its size and where every other part starts."),
+        el("details", { open: "" }, el("summary", {}, "Fields"), table(["Field", "Value"], [
+          row("magic", "0x" + sb.magic.toString(16).toUpperCase()),
+          ...["version", "block_size", "total_blocks", "inode_count", "inode_bitmap_start", "data_bitmap_start",
+              "inode_table_start", "inode_table_blocks", "data_region_start", "data_region_blocks", "root_inode", "flags"]
+            .map(k => row(k, String(sb[k]))),
+          row("mtime_epoch", formatTime(sb.mtime_epoch)),
+          row("checksum", "0x" + sb.checksum.toString(16).padStart(8, "0") + " (OK)"),
+        ])),
+      ];
+    case "inodeBitmap":
+    case "dataBitmap": {
+      const isInode = info.kind === "inodeBitmap";
+      const count = isInode ? sb.inode_count : sb.data_region_blocks;
+      const start = isInode ? sb.inode_bitmap_start : sb.data_bitmap_start;
+      const used = [];
+      const grid = el("div", { class: "bits", "aria-hidden": "true" });
+      for (let i = 0; i < count; i++) {
+        const on = img.bitSet(start, i);
+        if (on) used.push(isInode ? i + 1 : sb.data_region_start + i);
+        grid.append(el("span", { class: on ? "on" : "" }));
+      }
+      return [
+        el("p", { class: "muted" }, isInode ? "One bit per inode. A filled square means that inode is in use." : "One bit per data block. A filled square means that block is in use."),
+        grid,
+        el("p", {}, `${used.length} of ${count} in use: `, el("span", { class: "mono" }, (isInode ? "inode " : "block ") + used.join(", "))),
+      ];
+    }
+    case "inodeTable": {
+      const first = (block - sb.inode_table_start) * img.BS / img.INODE_SIZE + 1;
+      const inodes = [...new Map(img.entries.map(e => [e.ino, e])).values()]
+        .filter(e => e.inode.block === block).sort((a, b) => a.ino - b.ino);
+      return [
+        el("p", { class: "muted" }, `Holds the records for inodes ${first}–${Math.min(first + img.BS / img.INODE_SIZE - 1, sb.inode_count)}. An inode records a file's size, timestamps and data blocks, but not its name.`),
+        inodes.length ? el("div", { style: "margin-top:10px" }, table(["Inode", "Used by", "Size", "Links", "Blocks", "Checksum"], inodes.map(e => row(
+          String(e.ino),
+          e.type === 1 ? linkButton(e.name, () => openFile(e)) : "Root directory",
+          String(e.inode.size), String(e.inode.links),
+          e.inode.direct.filter(Boolean).join(", ") || "None",
+          statusText(e.inode.checksumOk),
+        )))) : el("p", { style: "margin-top:10px" }, "No inodes in this block are in use."),
+      ];
+    }
+    case "dir":
+      return [
+        el("p", { class: "muted" }, "A list of names, each pointing to an inode. This is the only place a file's name is stored."),
+        el("div", { style: "margin-top:10px" }, table(["Inode", "Type", "Name", "Checksum"], img.entries.filter(e => e.block === block).map(e => row(
+          String(e.ino), e.type === 2 ? "Directory" : e.type === 1 ? "File" : "Unknown",
+          e.type === 1 ? linkButton(e.name, () => openFile(e)) : e.name,
+          statusText(e.checksumOk),
+        )))),
+      ];
+    case "file": {
+      const e = entryFor(info.owner);
+      const data = fileBlocks(e);
+      return [el("p", {}, `Holds part ${data.indexOf(block) + 1} of ${data.length} of `, el("span", { class: "mono" }, e.name), `, which is ${e.inode.size} bytes.`)];
+    }
+    case "orphan":
+      return [el("p", {}, "The data bitmap marks this block as in use, but no file in the root directory points to it.")];
+    case "free":
+      return [el("p", { class: "muted" }, "Not in use. MiniVSFS gives new files the first free block it finds.")];
+    default:
+      return [el("p", { class: "muted" }, "This block isn't part of any region listed in the superblock.")];
+  }
+}
+
+function drawDetail() {
+  const block = selection.block, info = img.blocks[block];
+  const e = selection.ino && entryFor(selection.ino);
+  const raw = el("details", info.kind === "file" ? { open: "" } : {},
+    el("summary", {}, "Raw bytes"), el("pre", { class: "hex", tabindex: "0" }, hexDump(block)));
+  $("detail").replaceChildren(
+    ...(e ? [chainView(e)] : []),
+    el("h2", {}, `Block ${block}: ${KIND[info.kind].name}`),
+    ...detailBody(block, info),
+    raw);
+}
+
+function moveWithArrows(event) {
+  const cells = [...$("map").children];
+  const index = cells.indexOf(event.target);
+  if (index < 0) return;
+  const columns = getComputedStyle($("map")).gridTemplateColumns.split(" ").length;
+  const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns }[event.key];
+  if (!step || !cells[index + step]) return;
+  event.preventDefault();
+  const next = index + step;
+  select(next, img.blocks[next].kind === "file" ? img.blocks[next].owner : null);
+  cells[next].focus();
+}
+
+function showImage(model, fileName) {
+  img = model;
+  const { sb } = img;
+  $("summary").textContent = `${fileName}: ${sb.total_blocks} blocks, ${img.inodesUsed} of ${sb.inode_count} inodes used, ${img.blocksFree} data blocks free`;
+
+  $("map").replaceChildren(...img.blocks.map((info, b) => el("button", {
+    class: "cell " + KIND[info.kind].css,
+    title: `Block ${b}: ${KIND[info.kind].name}`,
+    "aria-label": `Block ${b}: ${KIND[info.kind].name}`,
+    onclick: () => select(b, info.kind === "file" ? info.owner : null),
+  }, String(b))));
+  $("orphan-legend").hidden = !img.blocks.some(info => info.kind === "orphan");
+
+  const files = img.entries.filter(e => e.type === 1);
+  $("files").replaceChildren(files.length
+    ? table(["Name", "Inode", "Size", "Blocks"], files.map(e => {
+        const r = row(linkButton(e.name, () => openFile(e)), String(e.ino), `${e.inode.size} bytes`, e.inode.direct.filter(Boolean).join(", ") || "None");
+        r.dataset.ino = e.ino;
+        return r;
+      }))
+    : el("p", { class: "muted" }, "This image has no files yet. Add one with mkfs_adder."));
+
+  $("drop").hidden = true;
+  $("app").hidden = false;
+  if (files.length) openFile(files[0]);
+  else select(0);
+  if (img.warnings.length) {
+    $("notices").append(el("div", { class: "notice warn", role: "status" }, "This image has problems, so some of it may be shown incorrectly:",
+      el("ul", {}, ...img.warnings.map(w => el("li", {}, w)))));
+  }
+}
+
+async function loadFile(file) {
+  $("notices").replaceChildren();
+  const showError = message => {
+    $("notices").append(el("div", { class: "notice error", role: "alert" }, `Couldn't open ${file.name}. ${message}`));
+  };
+  // The largest valid image is 4096 KiB, so don't read anything bigger into memory
+  if (file.size > 4096 * 1024) return showError("This file is too large to be a MiniVSFS image.");
+  let model;
+  try {
+    model = parseImage(new Uint8Array(await file.arrayBuffer()));
+  } catch (err) {
+    return showError("It couldn't be read.");
+  }
+  if (model.error) return showError(model.error);
+  showImage(model, file.name);
+}
+
+$("picker").addEventListener("change", event => {
+  if (event.target.files[0]) loadFile(event.target.files[0]);
+  event.target.value = "";
+});
+$("map").addEventListener("keydown", moveWithArrows);
+addEventListener("dragover", event => { event.preventDefault(); document.body.classList.add("dragging"); });
+addEventListener("dragleave", event => { if (!event.relatedTarget) document.body.classList.remove("dragging"); });
+addEventListener("drop", event => {
+  event.preventDefault();
+  document.body.classList.remove("dragging");
+  if (event.dataTransfer.files[0]) loadFile(event.dataTransfer.files[0]);
+});
+</script>
+</body>
+</html>
