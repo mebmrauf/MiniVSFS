@@ -45,7 +45,8 @@ INODE  TYPE      SIZE  NAME
 ### Explore it in the browser
 
 Open the [MiniVSFS viewer](https://mebmrauf.github.io/MiniVSFS/) and drop in `out2.img`, or open
-`viewer.html` from this repo. It shows every block as a map. Click a file to follow it from its
+`viewer.html` from this repo. No image yet? Choose **Try a sample image**, with nothing to install.
+The viewer shows every block as a map. Click a file to follow it from its
 name to its inode to its data, or click any block to see what it holds. Your image stays on your
 computer: the page can't send anything over the network.
 

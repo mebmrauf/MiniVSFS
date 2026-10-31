@@ -97,9 +97,13 @@ if command -v node >/dev/null; then
     cat > viewer_list.js <<'EOF'
 const fs = require("fs");
 const html = fs.readFileSync(process.argv[2], "utf8");
-const parseImage = new Function(html.match(/<script id="parser">([\s\S]*?)<\/script>/)[1] + "; return parseImage;")();
+const { parseImage, sampleImage } = new Function(html.match(/<script id="parser">([\s\S]*?)<\/script>/)[1] + "; return { parseImage, sampleImage };")();
+if (process.argv[3] === "--write-sample") {
+    fs.writeFileSync("sample.img", sampleImage());
+    process.exit(0);
+}
 const name = process.argv[3], img = parseImage(new Uint8Array(fs.readFileSync(name)));
-if (img.error) process.exit(1);
+if (img.error || img.warnings.length) process.exit(1);
 console.log(`${name}: ${img.sb.total_blocks} blocks, ${img.inodesUsed} of ${img.sb.inode_count} inodes used, ${img.blocksFree} data blocks free\n`);
 console.log("INODE  TYPE      SIZE  NAME");
 for (const e of img.entries) {
@@ -112,6 +116,12 @@ EOF
     viewer_list viewer.img > viewer_listing.txt
     ./mkfs_ls --image viewer.img > ls_listing.txt
     check "viewer and mkfs_ls list the same contents" 0 cmp viewer_listing.txt ls_listing.txt
+    viewer_list --write-sample
+    viewer_list sample.img > viewer_sample.txt
+    ./mkfs_ls --image sample.img > ls_sample.txt
+    check "viewer's sample image is accepted by mkfs_ls" 0 ./mkfs_ls --image sample.img
+    check "viewer and mkfs_ls agree on the sample image" 0 cmp viewer_sample.txt ls_sample.txt
+    check "sample image has a file spanning two blocks" 0 grep -Eq '^ +4  file +[0-9]+  notes.txt$' ls_sample.txt
     check "viewer rejects a non-image" 1 viewer_list junk.img
     check "viewer rejects a truncated image" 1 viewer_list short.img
     check "viewer rejects an image with extra data" 1 viewer_list long.img
